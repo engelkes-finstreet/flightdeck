@@ -197,6 +197,65 @@ caught up" with a restore button rather than pretending nothing is running.
 Records for sessions that have been gone over a week are pruned so
 `dismissed.json` cannot grow without bound.
 
+## Jumping to an agent
+
+Clicking a card goes to where that agent is actually running — the Ghostty tab,
+the WebStorm window with the embedded terminal it was started from.
+
+The host is found by walking the agent's process ancestry until a real GUI
+application appears (`claude` -> `zsh` -> Ghostty). That has to be a process
+walk rather than a guess from the working directory: one WebStorm process
+commonly hosts five projects at once, and the directory says nothing about
+which terminal you launched from.
+
+Picking the window *inside* that app is done through whatever interface the app
+publishes for it, because there is no general mechanism that is also safe:
+
+| Host | How | Precision |
+| --- | --- | --- |
+| Ghostty | AppleScript; each terminal surface reports its working directory | exact tab |
+| Terminal.app, iTerm2 | AppleScript; tabs expose the tty the agent is attached to | exact tab |
+| JetBrains IDEs | re-open the project root, which focuses the window already showing it | exact window |
+| VS Code, Cursor, Zed | same, anchored on `.vscode`/`.git` | exact window |
+| anything else | the app is raised, and that is all | app only |
+
+The app is always activated first and synchronously, so an unrecognised host
+still gets you most of the way. Everything past that is best effort, and
+declines rather than guesses: two agents in one directory are separated by tab
+title if Claude Code's title and Flightdeck's agree well enough, and left alone
+if they do not. Landing in the wrong window is worse than landing in the right
+app.
+
+An IDE is only ever handed a directory that is demonstrably a project root —
+for JetBrains, the one holding `.idea`. Handing it a subdirectory does not
+focus anything; it opens a second project on top of the one you wanted.
+
+First use raises the system's automation prompt for that particular app.
+Refusing it costs you the window, not the jump: the app is already frontmost.
+A background (`--bg`) agent has no window at all, so its card opens the project
+folder instead.
+
+`--locate` prints what a click would target, for every live agent, without
+stealing the focus you are trying to watch. `--jump <name>` performs one:
+
+```bash
+"$(swift build -c release --show-bin-path)/Flightdeck" --locate
+"$(swift build -c release --show-bin-path)/Flightdeck" --jump watchtower-1e
+```
+
+### Why not the Window menu
+
+Every app lists its windows and tabs at the bottom of its Window menu, and the
+accessibility API can read and press those entries — one mechanism covering
+every host, including the ones above.
+
+It is not used here because it cannot be made safe. The press only takes effect
+once the menu has actually been opened; pressing an entry of a menu that was
+never shown reports success and does nothing. And opening a JetBrains IDE's
+menu bar programmatically kills it: WebStorm 2026.2 aborts during
+menu-tracking teardown, taking every terminal in it down too. The per-host
+interfaces above are narrower, and they are meant to be called.
+
 ## Self-test
 
 The dismissal mechanic is covered by an end-to-end test that drives the real
@@ -215,7 +274,11 @@ machinery, and a cached title dies with the prompt it came from. The usage
 windows are covered against a synthetic `~/.claude.json` and tap file: the
 fresher of the two sources wins whichever it is, fractional percentages
 survive, a rolled-over window is flagged rather than reported, and an absent
-reading yields nothing rather than a zero.
+reading yields nothing rather than a zero. Window targeting is covered against
+the strings Ghostty and WebStorm really produced: the working directory wins
+over a title that merely reads like the task, two agents in one directory are
+separated by title, near-identical tabs are declined rather than guessed
+between, and a project root is found from a subdirectory.
 
 `titles.json` is derived data — delete it to regenerate every title.
 

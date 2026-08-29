@@ -29,6 +29,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSSupportsAutomaticTermination</key><false/>
+  <key>NSAppleEventsUsageDescription</key><string>Flightdeck asks your terminal or editor to bring the window an agent is running in to the front when you click its card.</string>
 </dict>
 </plist>
 PLIST
