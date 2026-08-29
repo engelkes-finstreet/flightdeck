@@ -126,6 +126,12 @@ struct Session: Identifiable, Equatable {
     /// Cleared from the view, and nothing has happened since.
     var isDismissed: Bool = false
     var gitBranch: String?
+    /// The app whose window this agent is running in, when it has one.
+    /// Nil for detached background agents, which live in no window at all.
+    var host: AgentHost?
+    /// The terminal device the agent is attached to, e.g. `/dev/ttys004`.
+    /// How Terminal.app and iTerm2 identify the tab it is running in.
+    var tty: String?
 
     var id: String { sessionId }
 

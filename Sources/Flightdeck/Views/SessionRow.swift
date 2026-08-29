@@ -74,8 +74,11 @@ struct SessionRow: View {
         )
         .opacity(session.isAlive ? 1 : 0.6)
         .onHover { hovering = $0 }
-        .onTapGesture { reveal() }
+        .onTapGesture { jump() }
         .contextMenu {
+            if let host = session.host {
+                Button("Jump to \(host.name)") { jump() }
+            }
             Button("Open Project Folder") { reveal() }
             Button("Copy Session ID") { copy(session.sessionId) }
             Button("Copy Attach Command") { copy("claude attach \(session.sessionId.prefix(8))") }
@@ -90,6 +93,9 @@ struct SessionRow: View {
     /// The card is terse; the tooltip carries the full request and identifiers.
     private var tooltip: String {
         var lines = ["\(session.name) · pid \(session.pid) · \(session.activity.label)", session.cwd]
+        if let host = session.host {
+            lines.append("click to jump to \(host.name)")
+        }
         if let detail = session.detail, detail != session.headline {
             lines.append("")
             lines.append(String(detail.prefix(400)))
@@ -104,5 +110,12 @@ struct SessionRow: View {
 
     private func reveal() {
         NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: session.cwd)
+    }
+
+    /// Go to where this agent is actually running. A background agent has no
+    /// window, so the click falls back to the one place it does exist on
+    /// screen — its project folder.
+    private func jump() {
+        if case .noHost = WindowLocator.jump(to: session) { reveal() }
     }
 }

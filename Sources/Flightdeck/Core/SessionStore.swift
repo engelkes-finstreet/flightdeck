@@ -131,6 +131,13 @@ final class SessionStore: ObservableObject {
                 gitBranch: intent.gitBranch
             )
 
+            // Only meaningful while the process exists to be walked, and only
+            // costs a couple of sysctls per live agent.
+            if alive {
+                session.host = WindowLocator.host(ofAgent: record.pid)
+                session.tty = WindowLocator.tty(ofAgent: record.pid)
+            }
+
             // Drop long-dead sessions so the list stays a live picture.
             if !alive, Date().timeIntervalSince(since) > inactiveHorizon { continue }
 

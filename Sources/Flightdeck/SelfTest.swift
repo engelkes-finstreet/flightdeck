@@ -245,6 +245,109 @@ enum SelfTest {
         return failures
     }
 
+    /// Cover for window targeting. The strings here are the ones Ghostty and
+    /// WebStorm actually produced on this machine. The rule that matters is
+    /// that a wrong window is worse than no window — an unmatched session
+    /// should give up and merely raise the app.
+    static func locatorTests() -> Int {
+        var failures = 0
+        func check(_ label: String, _ condition: Bool) {
+            print("  \(condition ? "PASS" : "FAIL")  \(label)")
+            if !condition { failures += 1 }
+        }
+
+        func session(project: String, title: String?, name: String = "agent-00") -> Session {
+            Session(pid: 1, sessionId: "s", cwd: "/Users/x/workspace/\(project)",
+                    name: name, kind: "interactive", agent: nil,
+                    activity: .busy, isAlive: true, since: Date(), startedAt: Date(),
+                    title: title, generatedTitle: nil, headingTitle: nil, detail: nil)
+        }
+        func surface(_ id: String, _ cwd: String, _ title: String) -> WindowLocator.GhosttySurface {
+            WindowLocator.GhosttySurface(id: id, cwd: cwd, title: title)
+        }
+
+        print("\n8. Jumping to the window an agent runs in")
+
+        // Working directory is the strong signal, and it beats a tab whose
+        // title happens to read like the task.
+        let surfaces = [
+            surface("a", "/Users/x/workspace/watchtower", "◐ Rewrite the parser tests"),
+            surface("b", "/Users/x/workspace/flightdeck", "◑ Branch commit and push status"),
+            surface("c", "/Users/x/workspace/babysteps", "claude agents")
+        ]
+        let branchy = session(project: "flightdeck",
+                              title: "Is everything commited and pushed on this branch right now?")
+        check("terminal picked by working directory",
+              WindowLocator.pick(from: surfaces, for: branchy)?.id == "b")
+
+        // A trailing slash is a formatting difference, not a different place.
+        let slashed = [surface("a", "/Users/x/workspace/flightdeck/", "◑ Whatever")]
+              + surfaces.filter { $0.id != "b" }
+        check("trailing slash still matches",
+              WindowLocator.pick(from: slashed, for: branchy)?.id == "a")
+
+        // Two agents in one directory: fall back to what Claude Code titled
+        // the tabs, which is its own summary of the same prompt.
+        let shared = [
+            surface("x", "/Users/x/workspace/flightdeck", "◑ Branch commit and push status"),
+            surface("y", "/Users/x/workspace/flightdeck", "◐ Rewrite the parser tests")
+        ]
+        check("same directory settled by tab title",
+              WindowLocator.pick(from: shared, for: branchy)?.id == "x")
+
+        let parser = session(project: "flightdeck", title: "Rewrite the parser tests")
+        check("same directory, exact title",
+              WindowLocator.pick(from: shared, for: parser)?.id == "y")
+
+        // Near-identical work in one directory: no clear winner, so no jump.
+        let ambiguous = [
+            surface("x", "/Users/x/workspace/flightdeck", "◑ Fix the flaky upload test"),
+            surface("y", "/Users/x/workspace/flightdeck", "◐ Fix the flaky download test")
+        ]
+        let flaky = session(project: "flightdeck", title: "Fix the flaky test")
+        check("ambiguous tabs are left alone",
+              WindowLocator.pick(from: ambiguous, for: flaky) == nil)
+
+        // A lone terminal is the answer whatever it is called: ancestry
+        // already proved the agent is inside this app.
+        check("a lone terminal needs no agreement",
+              WindowLocator.pick(from: [surface("z", "/somewhere/else", "unrelated")],
+                                 for: branchy)?.id == "z")
+
+        // Filler must not carry a match on its own.
+        let unrelated = session(project: "flightdeck", title: "Is it the one that you can do now")
+        check("stop words alone do not match", WindowLocator.match(
+            titles: ["Is this the one to do", "claude agents"],
+            to: WindowLocator.titleCandidates(for: unrelated)) == nil)
+
+        // The agent's own tty is what Terminal.app and iTerm2 key tabs on.
+        // Whether this process has one depends on how the tests were started,
+        // so assert the shape rather than the presence.
+        let mine = ProcessInfo.processInfo.processIdentifier
+        let ownTTY = WindowLocator.tty(ofAgent: mine)
+        check("a resolved tty is a device path", ownTTY == nil || ownTTY!.hasPrefix("/dev/tty"))
+        check("no tty claimed for a dead pid", WindowLocator.tty(ofAgent: 999_999) == nil)
+        check("no host claimed for a dead pid", WindowLocator.host(ofAgent: 999_999) == nil)
+
+        // An IDE handed a subdirectory opens a second project instead of
+        // focusing the one already there, so the root has to be found first.
+        let tree = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("flightdeck-root-\(UUID().uuidString)")
+        let deep = tree.appendingPathComponent("packages/api/src")
+        try? FileManager.default.createDirectory(at: deep, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: tree.appendingPathComponent(".idea"),
+                                                 withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tree) }
+
+        check("project root found from a subdirectory",
+              WindowLocator.projectRoot(for: deep.path, bundleID: "com.jetbrains.WebStorm")
+                  == tree.standardizedFileURL.path)
+        check("no root, no guess",
+              WindowLocator.projectRoot(for: deep.path, bundleID: "com.microsoft.VSCode") == nil)
+
+        return failures
+    }
+
     static func run() -> Never {
         var failures = 0
 
@@ -352,6 +455,7 @@ enum SelfTest {
 
         failures += titleTests()
         failures += usageTests()
+        failures += locatorTests()
 
         print("\n\(failures == 0 ? "ALL PASSED" : "\(failures) FAILURE(S)")")
         exit(failures == 0 ? 0 : 1)

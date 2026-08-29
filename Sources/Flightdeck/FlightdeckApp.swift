@@ -15,6 +15,41 @@ struct FlightdeckApp: App {
     init() {
         // `Flightdeck --dump` prints the computed roster and exits, so the data
         // layer can be verified without looking at the window.
+        // `--jump <name>` drives the same path a click does, from a terminal.
+        // Useful on its own, and the only way to check that pressing a window
+        // menu entry really moves focus.
+        if let index = CommandLine.arguments.firstIndex(of: "--jump"),
+           index + 1 < CommandLine.arguments.count {
+            let wanted = CommandLine.arguments[index + 1]
+            MainActor.assumeIsolated {
+                let store = SessionStore()
+                store.refresh()
+                guard let session = store.sessions.first(where: {
+                    $0.isAlive && ($0.name == wanted || $0.project == wanted)
+                }) else {
+                    print("no live session named \(wanted)")
+                    exit(1)
+                }
+                print(WindowLocator.explain(session))
+                switch WindowLocator.jump(to: session) {
+                case .dispatched(let host): print("-> raised \(host.name)")
+                case .noHost:               print("-> no GUI host")
+                }
+            }
+            // The press is deferred past activation, so let the run loop turn.
+            RunLoop.main.run(until: Date().addingTimeInterval(1.5))
+            exit(0)
+        }
+        if CommandLine.arguments.contains("--locate") {
+            MainActor.assumeIsolated {
+                let store = SessionStore()
+                store.refresh()
+                for session in store.sessions where session.isAlive {
+                    print(WindowLocator.explain(session))
+                }
+            }
+            exit(0)
+        }
         if CommandLine.arguments.contains("--selftest") {
             MainActor.assumeIsolated { SelfTest.run() }
         }
