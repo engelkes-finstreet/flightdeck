@@ -44,6 +44,25 @@ recently changed. Each card keeps a lane-coloured stripe and status word, so
 status is still readable at a glance without lane headers. The project name was
 removed from the cards themselves, since the header now carries it.
 
+A **git worktree** groups under the repository it was cut from, not under
+itself. Three feature worktrees of `fs-data-extraction` are one project with
+three agents in it, not three unrelated projects that happen to sit next to
+each other. Git already records the relationship and it costs one file read to
+ask: inside a worktree `.git` is a *file* reading
+`gitdir: <repo>/.git/worktrees/<name>`, which names the repository outright —
+no `git` subprocess on the refresh path.
+
+Only a linked worktree redirects. Walking up stops at the first `.git` of
+either kind, so a repository nested inside another one is not claimed for the
+outer one's worktrees, and a submodule — whose `.git` is a pointer file too,
+but targeting `.git/modules/<name>` — stays its own project.
+
+Those cards show the worktree's **live** branch, read from its own `HEAD`,
+rather than the one in the transcript. Claude Code records the branch as it was
+when the session opened, which for a worktree is routinely the branch it was
+cut from: before this, three worktree cards sitting under one header all read
+`main`.
+
 ## Lanes
 
 | Lane | Meaning |
@@ -278,7 +297,14 @@ reading yields nothing rather than a zero. Window targeting is covered against
 the strings Ghostty and WebStorm really produced: the working directory wins
 over a title that merely reads like the task, two agents in one directory are
 separated by title, near-identical tabs are declined rather than guessed
-between, and a project root is found from a subdirectory.
+between, and a project root is found from a subdirectory. Finally the mini
+deck: the strip lists in-flight agents only, an unknown status is not dropped
+from it, whoever needs you sorts first, and the reference-counted watchers keep
+running when one of the two windows closes. Worktree grouping is exercised
+against a real `git worktree` layout on disk: agents in three worktrees and in
+the repository itself land under one header, a detached worktree claims no
+branch, and an ordinary checkout, a directory in no repository, and a submodule
+are all left alone.
 
 `titles.json` is derived data — delete it to regenerate every title.
 
@@ -302,10 +328,12 @@ Type is sized to be read from across a desk rather than for maximum density —
 this window is meant to be glanced at on a second display, not studied. Base
 sizes live in `Theme.Size`; every one of them is multiplied by a persisted user
 scale, so `⌘+` / `⌘-` / `⌘0` resize the whole window coherently (range
-0.85–1.6). Default window width is 440pt to suit the larger text.
+0.85–1.6). Default window width is 440pt to suit the larger text. The mini deck
+shares the same multiplier, from a much smaller base.
 
 Shortcuts: `⌘K` clear done, `⌘Z` undo that, `⌘+` / `⌘-` / `⌘0` text size,
-`⌘⇧T` toggles float-above-other-windows, `⌘R` forces a refresh,
+`⌘⇧M` toggles the mini deck, `⌘⇧T` toggles float-above-other-windows,
+`⌘R` forces a refresh,
 `⌃⌘F` (or the green button) goes full screen.
 Click a card to reveal its project in Finder; right-click for the session ID
 and an `claude attach` command.
@@ -336,6 +364,52 @@ Above roughly 700pt of width, projects flow into multiple columns instead of
 one stretched column, so a tiled half-display or a full screen reads as a
 board. At the default 440pt it is the same single column as before.
 
+## Mini deck
+
+The main window assumes a display you can give it. On a laptop there is no
+such display, so `⌘⇧M` (View ▸ Show Mini Deck, or the button in the header)
+opens a second window that is only the roster of agents actually in flight:
+
+```
+✈ 2
+● watchtower                1m ◐
+● flightdeck                7m ◐
+```
+
+Roughly 210 × 20pt per agent. Everything that is not a project name is either a
+glyph or in the tooltip — hovering a row gives the headline, the branch and the
+window it will jump to; clicking jumps there, exactly as in the main window.
+
+What it shows is `SessionStore.activeSessions`: the running lane plus anything
+in NEEDS ATTENTION. Finished agents are deliberately absent — a row that
+lingers after the work is done is precisely the screen space the strip exists
+to save — and an unknown status counts as running here for the same reason it
+does everywhere else, so an agent can never go missing from it. A "needs you"
+agent keeps the bell glyph and gets an amber clock; that is the only second
+colour on the strip.
+
+Three window behaviours are the whole point, and are why `MiniDeckController`
+drives an `NSPanel` directly instead of adding a SwiftUI `Window` scene:
+
+- It stays at `.floating` unconditionally. The main window deliberately drops
+  to `.normal` while Flightdeck is active so it can be full-screened and tiled
+  (see below); the strip wants none of that.
+- `.canJoinAllSpaces` + `.fullScreenAuxiliary` puts it over a terminal that is
+  itself full screen, which is the usual shape of working on one display.
+- `.nonactivatingPanel` means clicking a row hands focus straight to the
+  terminal the agent runs in, rather than routing through Flightdeck first.
+
+The panel is borderless: with `.titled` the frame carries a titlebar's height
+even under `.fullSizeContentView`, which on a strip this small is a third of it
+again in transparent dead space. Height follows the roster
+(`NSHostingController.sizingOptions`), and the top-left corner is held still
+across those resizes so the list grows downwards instead of creeping towards
+the menu bar. Position is remembered between launches, as is whether the strip
+was open.
+
+The store's file watchers are reference counted, so the strip keeps the data
+live on its own — closing the main window does not freeze it.
+
 ## Known caveats
 
 - `~/.claude/sessions/*.json` is **internal and undocumented**. A Claude Code
@@ -358,4 +432,4 @@ board. At the default 440pt it is the same single column as before.
 ## Not built yet
 
 Notification on hand-back (`SessionStore.onHandback` is wired and unused),
-click-to-focus the owning terminal/IDE window, launch-at-login, app icon.
+launch-at-login, app icon.

@@ -126,6 +126,10 @@ struct Session: Identifiable, Equatable {
     /// Cleared from the view, and nothing has happened since.
     var isDismissed: Bool = false
     var gitBranch: String?
+    /// Set only when `cwd` is a git worktree: the name of the repository the
+    /// worktree was cut from. Every worktree of one repo then groups under
+    /// that repo instead of each becoming a project of its own.
+    var repoName: String?
     /// The app whose window this agent is running in, when it has one.
     /// Nil for detached background agents, which live in no window at all.
     var host: AgentHost?
@@ -135,8 +139,10 @@ struct Session: Identifiable, Equatable {
 
     var id: String { sessionId }
 
-    /// Last path component of the working directory, e.g. `sandcastle-poc`.
+    /// What the card groups under: the repository for a worktree, otherwise
+    /// the last path component of the working directory, e.g. `sandcastle-poc`.
     var project: String {
+        if let repoName, !repoName.isEmpty { return repoName }
         let trimmed = cwd.hasSuffix("/") ? String(cwd.dropLast()) : cwd
         return (trimmed as NSString).lastPathComponent
     }

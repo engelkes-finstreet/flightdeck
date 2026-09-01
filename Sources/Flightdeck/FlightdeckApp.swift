@@ -4,6 +4,9 @@ import AppKit
 @main
 struct FlightdeckApp: App {
     @StateObject private var store = SessionStore()
+    /// The floating strip for laptop days. Lives outside the Scene graph
+    /// because it needs AppKit-level window behaviour — see MiniDeckController.
+    @StateObject private var mini = MiniDeckController()
     /// Keep the window above editors so it stays readable on a second display.
     @AppStorage("floatOnTop") private var floatOnTop = true
     /// Multiplier on every point size, so the window can be read from across
@@ -101,10 +104,13 @@ struct FlightdeckApp: App {
 
     var body: some Scene {
         Window("Flightdeck", id: "flightdeck") {
-            FlightdeckView(store: store)
+            FlightdeckView(store: store, mini: mini)
                 .environment(\.textScale, CGFloat(textScale))
                 .background(WindowConfigurator(floating: floatOnTop))
-                .onAppear { store.start() }
+                .onAppear {
+                    store.start()
+                    mini.restoreIfPreviouslyOpen(store: store)
+                }
                 .onDisappear { store.stop() }
         }
         .defaultSize(width: 440, height: 840)
@@ -113,6 +119,10 @@ struct FlightdeckApp: App {
             CommandGroup(after: .toolbar) {
                 Toggle("Float Above Other Windows", isOn: $floatOnTop)
                     .keyboardShortcut("t", modifiers: [.command, .shift])
+                Button(mini.isVisible ? "Hide Mini Deck" : "Show Mini Deck") {
+                    mini.toggle(store: store)
+                }
+                .keyboardShortcut("m", modifiers: [.command, .shift])
                 Button("Refresh Now") { store.refresh() }
                     .keyboardShortcut("r", modifiers: .command)
 

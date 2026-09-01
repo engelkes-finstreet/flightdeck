@@ -245,6 +245,84 @@ enum SelfTest {
         return failures
     }
 
+    /// Cover for the mini deck's two load-bearing behaviours: the strip shows
+    /// only what is in flight, and it keeps the data alive on its own so
+    /// closing the main window does not freeze it.
+    static func miniDeckTests() -> Int {
+        var failures = 0
+        func check(_ label: String, _ condition: Bool) {
+            print("  \(condition ? "PASS" : "FAIL")  \(label)")
+            if !condition { failures += 1 }
+        }
+
+        print("\n19. The mini deck")
+
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("flightdeck-mini-\(UUID().uuidString)")
+        let sessionsDir = root.appendingPathComponent("sessions")
+        try! FileManager.default.createDirectory(at: sessionsDir,
+                                                 withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let now = Date().timeIntervalSince1970 * 1000
+        func write(_ id: String, project: String, status: String) {
+            let record: [String: Any] = [
+                // Our own pid, so every synthetic agent reads as alive.
+                "pid": ProcessInfo.processInfo.processIdentifier,
+                "sessionId": id,
+                "cwd": root.appendingPathComponent(project).path,
+                "name": id,
+                "kind": "interactive",
+                "status": status,
+                "startedAt": now - 60_000,
+                "updatedAt": now,
+                "statusUpdatedAt": now,
+            ]
+            try! JSONSerialization.data(withJSONObject: record)
+                .write(to: sessionsDir.appendingPathComponent("\(id).json"))
+        }
+
+        write("a", project: "alpha", status: "busy")
+        write("b", project: "bravo", status: "idle")
+        write("c", project: "charlie", status: "needs_input")
+        write("d", project: "delta", status: "compacting")
+        // An open vocabulary status counts as working everywhere else in the
+        // app; the strip must not be the one place an agent goes missing.
+        write("e", project: "echo", status: "shell")
+
+        let store = SessionStore(
+            sessionsDir: sessionsDir,
+            titles: TitleService(enabled: false),
+            dismissals: DismissalStore(storeURL: root.appendingPathComponent("dismissed.json"))
+        )
+        store.refresh()
+
+        let strip = store.activeSessions.map(\.project)
+        check("the finished agent is left out", !strip.contains("bravo"))
+        check("the working agent is in", strip.contains("alpha"))
+        check("compacting counts as in flight", strip.contains("delta"))
+        check("an unknown status is not dropped", strip.contains("echo"))
+        check("an agent waiting on you is in", strip.contains("charlie"))
+        check("nothing else is listed", strip.count == 4)
+        check("whoever needs you is first", strip.first == "charlie")
+
+        // Clearing only ever touches finished agents, so the strip is
+        // unaffected by cleanup in the main window.
+        store.clearFinished()
+        check("cleanup does not empty the strip", store.activeSessions.count == 4)
+
+        print("\n   watchers are shared between the two windows")
+        store.start()   // main window
+        store.start()   // mini deck
+        check("watching once both are open", store.isWatching)
+        store.stop()    // main window closed
+        check("still watching for the strip alone", store.isWatching)
+        store.stop()    // strip closed
+        check("stops once nothing is open", !store.isWatching)
+
+        return failures
+    }
+
     /// Cover for window targeting. The strings here are the ones Ghostty and
     /// WebStorm actually produced on this machine. The rule that matters is
     /// that a wrong window is worse than no window — an unmatched session
@@ -344,6 +422,102 @@ enum SelfTest {
                   == tree.standardizedFileURL.path)
         check("no root, no guess",
               WindowLocator.projectRoot(for: deep.path, bundleID: "com.microsoft.VSCode") == nil)
+
+        return failures
+    }
+
+    /// Worktrees of one repository are one project, not one project each.
+    static func worktreeTests() -> Int {
+        var failures = 0
+        func check(_ label: String, _ condition: Bool) {
+            print("  \(condition ? "PASS" : "FAIL")  \(label)")
+            if !condition { failures += 1 }
+        }
+
+        print("\n20. Git worktrees group under their repository")
+
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("flightdeck-worktree-\(UUID().uuidString)")
+        let sessionsDir = root.appendingPathComponent("sessions")
+        let repo = root.appendingPathComponent("workspace/fs-data-extraction")
+        let gitDir = repo.appendingPathComponent(".git")
+        try? FileManager.default.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: gitDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        /// A worktree exactly as `git worktree add` leaves it: a directory
+        /// whose `.git` is a pointer file, plus the repo-side bookkeeping.
+        @discardableResult
+        func worktree(_ name: String, branch: String?) -> URL {
+            let dir = repo.appendingPathComponent(".claude/worktrees/\(name)")
+            let bookkeeping = gitDir.appendingPathComponent("worktrees/\(name)")
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try? FileManager.default.createDirectory(at: bookkeeping,
+                                                     withIntermediateDirectories: true)
+            try? "gitdir: \(bookkeeping.path)\n".write(to: dir.appendingPathComponent(".git"),
+                                                       atomically: true, encoding: .utf8)
+            let head = branch.map { "ref: refs/heads/\($0)\n" } ?? "9f1c0de\n"
+            try? head.write(to: bookkeeping.appendingPathComponent("HEAD"),
+                            atomically: true, encoding: .utf8)
+            return dir
+        }
+
+        let alpha = worktree("feat+alpha", branch: "worktree-feat+alpha")
+        let beta = worktree("feat+beta", branch: "worktree-feat+beta")
+        let detached = worktree("feat+detached", branch: nil)
+
+        check("a worktree names the repository it was cut from",
+              WorktreeLocator.resolve(cwd: alpha.path)?.repoName == "fs-data-extraction")
+        check("its live branch is read, not the one the session opened on",
+              WorktreeLocator.resolve(cwd: alpha.path)?.branch == "worktree-feat+alpha")
+        check("a subdirectory of a worktree resolves the same",
+              WorktreeLocator.resolve(cwd: alpha.appendingPathComponent("src/api").path)?
+                  .repoName == "fs-data-extraction")
+        check("a detached worktree claims no branch",
+              WorktreeLocator.resolve(cwd: detached.path)?.branch == nil)
+        check("an ordinary checkout is not a worktree",
+              WorktreeLocator.resolve(cwd: repo.path) == nil)
+        check("a directory in no repository at all is not a worktree",
+              WorktreeLocator.resolve(cwd: root.appendingPathComponent("workspace").path) == nil)
+
+        // A submodule's `.git` is a pointer file too, but it is its own
+        // project — merging it into the superproject would be wrong.
+        let submodule = repo.appendingPathComponent("vendor/parser")
+        try? FileManager.default.createDirectory(at: submodule, withIntermediateDirectories: true)
+        try? "gitdir: \(gitDir.appendingPathComponent("modules/parser").path)\n"
+            .write(to: submodule.appendingPathComponent(".git"),
+                   atomically: true, encoding: .utf8)
+        check("a submodule stays its own project",
+              WorktreeLocator.resolve(cwd: submodule.path) == nil)
+
+        // End to end: three agents in three worktrees plus one in the repo
+        // itself must land under a single header.
+        func write(_ id: String, cwd: String) {
+            let record: [String: Any] = [
+                "pid": ProcessInfo.processInfo.processIdentifier,
+                "sessionId": id, "cwd": cwd, "name": id,
+                "kind": "interactive", "status": "busy",
+                "statusUpdatedAt": Int(Date().timeIntervalSince1970 * 1000)
+            ]
+            let data = try? JSONSerialization.data(withJSONObject: record)
+            try? data?.write(to: sessionsDir.appendingPathComponent("\(id).json"))
+        }
+        write("a", cwd: alpha.path)
+        write("b", cwd: beta.path)
+        write("c", cwd: detached.path)
+        write("d", cwd: repo.path)
+
+        let store = SessionStore(sessionsDir: sessionsDir,
+                                 titles: TitleService(enabled: false),
+                                 dismissals: DismissalStore(storeURL: root
+                                     .appendingPathComponent("dismissed.json")))
+        store.refresh()
+        let groups = store.byProject()
+        check("four agents, one project", groups.count == 1)
+        check("named after the repository", groups.first?.name == "fs-data-extraction")
+        check("every agent is in it", groups.first?.sessions.count == 4)
+        check("the branch shown is the worktree's own",
+              store.sessions.first { $0.sessionId == "b" }?.gitBranch == "worktree-feat+beta")
 
         return failures
     }
@@ -456,6 +630,8 @@ enum SelfTest {
         failures += titleTests()
         failures += usageTests()
         failures += locatorTests()
+        failures += miniDeckTests()
+        failures += worktreeTests()
 
         print("\n\(failures == 0 ? "ALL PASSED" : "\(failures) FAILURE(S)")")
         exit(failures == 0 ? 0 : 1)
