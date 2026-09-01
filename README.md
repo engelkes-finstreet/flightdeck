@@ -44,6 +44,25 @@ recently changed. Each card keeps a lane-coloured stripe and status word, so
 status is still readable at a glance without lane headers. The project name was
 removed from the cards themselves, since the header now carries it.
 
+A **git worktree** groups under the repository it was cut from, not under
+itself. Three feature worktrees of `fs-data-extraction` are one project with
+three agents in it, not three unrelated projects that happen to sit next to
+each other. Git already records the relationship and it costs one file read to
+ask: inside a worktree `.git` is a *file* reading
+`gitdir: <repo>/.git/worktrees/<name>`, which names the repository outright —
+no `git` subprocess on the refresh path.
+
+Only a linked worktree redirects. Walking up stops at the first `.git` of
+either kind, so a repository nested inside another one is not claimed for the
+outer one's worktrees, and a submodule — whose `.git` is a pointer file too,
+but targeting `.git/modules/<name>` — stays its own project.
+
+Those cards show the worktree's **live** branch, read from its own `HEAD`,
+rather than the one in the transcript. Claude Code records the branch as it was
+when the session opened, which for a worktree is routinely the branch it was
+cut from: before this, three worktree cards sitting under one header all read
+`main`.
+
 ## Lanes
 
 | Lane | Meaning |
@@ -281,7 +300,11 @@ separated by title, near-identical tabs are declined rather than guessed
 between, and a project root is found from a subdirectory. Finally the mini
 deck: the strip lists in-flight agents only, an unknown status is not dropped
 from it, whoever needs you sorts first, and the reference-counted watchers keep
-running when one of the two windows closes.
+running when one of the two windows closes. Worktree grouping is exercised
+against a real `git worktree` layout on disk: agents in three worktrees and in
+the repository itself land under one header, a detached worktree claims no
+branch, and an ordinary checkout, a directory in no repository, and a submodule
+are all left alone.
 
 `titles.json` is derived data — delete it to regenerate every title.
 

@@ -426,6 +426,102 @@ enum SelfTest {
         return failures
     }
 
+    /// Worktrees of one repository are one project, not one project each.
+    static func worktreeTests() -> Int {
+        var failures = 0
+        func check(_ label: String, _ condition: Bool) {
+            print("  \(condition ? "PASS" : "FAIL")  \(label)")
+            if !condition { failures += 1 }
+        }
+
+        print("\n20. Git worktrees group under their repository")
+
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("flightdeck-worktree-\(UUID().uuidString)")
+        let sessionsDir = root.appendingPathComponent("sessions")
+        let repo = root.appendingPathComponent("workspace/fs-data-extraction")
+        let gitDir = repo.appendingPathComponent(".git")
+        try? FileManager.default.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: gitDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        /// A worktree exactly as `git worktree add` leaves it: a directory
+        /// whose `.git` is a pointer file, plus the repo-side bookkeeping.
+        @discardableResult
+        func worktree(_ name: String, branch: String?) -> URL {
+            let dir = repo.appendingPathComponent(".claude/worktrees/\(name)")
+            let bookkeeping = gitDir.appendingPathComponent("worktrees/\(name)")
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try? FileManager.default.createDirectory(at: bookkeeping,
+                                                     withIntermediateDirectories: true)
+            try? "gitdir: \(bookkeeping.path)\n".write(to: dir.appendingPathComponent(".git"),
+                                                       atomically: true, encoding: .utf8)
+            let head = branch.map { "ref: refs/heads/\($0)\n" } ?? "9f1c0de\n"
+            try? head.write(to: bookkeeping.appendingPathComponent("HEAD"),
+                            atomically: true, encoding: .utf8)
+            return dir
+        }
+
+        let alpha = worktree("feat+alpha", branch: "worktree-feat+alpha")
+        let beta = worktree("feat+beta", branch: "worktree-feat+beta")
+        let detached = worktree("feat+detached", branch: nil)
+
+        check("a worktree names the repository it was cut from",
+              WorktreeLocator.resolve(cwd: alpha.path)?.repoName == "fs-data-extraction")
+        check("its live branch is read, not the one the session opened on",
+              WorktreeLocator.resolve(cwd: alpha.path)?.branch == "worktree-feat+alpha")
+        check("a subdirectory of a worktree resolves the same",
+              WorktreeLocator.resolve(cwd: alpha.appendingPathComponent("src/api").path)?
+                  .repoName == "fs-data-extraction")
+        check("a detached worktree claims no branch",
+              WorktreeLocator.resolve(cwd: detached.path)?.branch == nil)
+        check("an ordinary checkout is not a worktree",
+              WorktreeLocator.resolve(cwd: repo.path) == nil)
+        check("a directory in no repository at all is not a worktree",
+              WorktreeLocator.resolve(cwd: root.appendingPathComponent("workspace").path) == nil)
+
+        // A submodule's `.git` is a pointer file too, but it is its own
+        // project — merging it into the superproject would be wrong.
+        let submodule = repo.appendingPathComponent("vendor/parser")
+        try? FileManager.default.createDirectory(at: submodule, withIntermediateDirectories: true)
+        try? "gitdir: \(gitDir.appendingPathComponent("modules/parser").path)\n"
+            .write(to: submodule.appendingPathComponent(".git"),
+                   atomically: true, encoding: .utf8)
+        check("a submodule stays its own project",
+              WorktreeLocator.resolve(cwd: submodule.path) == nil)
+
+        // End to end: three agents in three worktrees plus one in the repo
+        // itself must land under a single header.
+        func write(_ id: String, cwd: String) {
+            let record: [String: Any] = [
+                "pid": ProcessInfo.processInfo.processIdentifier,
+                "sessionId": id, "cwd": cwd, "name": id,
+                "kind": "interactive", "status": "busy",
+                "statusUpdatedAt": Int(Date().timeIntervalSince1970 * 1000)
+            ]
+            let data = try? JSONSerialization.data(withJSONObject: record)
+            try? data?.write(to: sessionsDir.appendingPathComponent("\(id).json"))
+        }
+        write("a", cwd: alpha.path)
+        write("b", cwd: beta.path)
+        write("c", cwd: detached.path)
+        write("d", cwd: repo.path)
+
+        let store = SessionStore(sessionsDir: sessionsDir,
+                                 titles: TitleService(enabled: false),
+                                 dismissals: DismissalStore(storeURL: root
+                                     .appendingPathComponent("dismissed.json")))
+        store.refresh()
+        let groups = store.byProject()
+        check("four agents, one project", groups.count == 1)
+        check("named after the repository", groups.first?.name == "fs-data-extraction")
+        check("every agent is in it", groups.first?.sessions.count == 4)
+        check("the branch shown is the worktree's own",
+              store.sessions.first { $0.sessionId == "b" }?.gitBranch == "worktree-feat+beta")
+
+        return failures
+    }
+
     static func run() -> Never {
         var failures = 0
 
@@ -535,6 +631,7 @@ enum SelfTest {
         failures += usageTests()
         failures += locatorTests()
         failures += miniDeckTests()
+        failures += worktreeTests()
 
         print("\n\(failures == 0 ? "ALL PASSED" : "\(failures) FAILURE(S)")")
         exit(failures == 0 ? 0 : 1)

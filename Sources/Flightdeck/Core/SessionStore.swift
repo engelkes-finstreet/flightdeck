@@ -143,6 +143,15 @@ final class SessionStore: ObservableObject {
                 gitBranch: intent.gitBranch
             )
 
+            // Worktrees of one repository belong under that repository, not
+            // under a project each. The worktree also knows its own branch,
+            // which the transcript does not — it records the branch the
+            // session opened on, typically the one the worktree was cut from.
+            if let worktree = WorktreeLocator.resolve(cwd: cwd) {
+                session.repoName = worktree.repoName
+                session.gitBranch = worktree.branch ?? intent.gitBranch
+            }
+
             // Only meaningful while the process exists to be walked, and only
             // costs a couple of sysctls per live agent.
             if alive {
