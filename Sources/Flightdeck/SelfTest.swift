@@ -245,6 +245,84 @@ enum SelfTest {
         return failures
     }
 
+    /// Cover for the mini deck's two load-bearing behaviours: the strip shows
+    /// only what is in flight, and it keeps the data alive on its own so
+    /// closing the main window does not freeze it.
+    static func miniDeckTests() -> Int {
+        var failures = 0
+        func check(_ label: String, _ condition: Bool) {
+            print("  \(condition ? "PASS" : "FAIL")  \(label)")
+            if !condition { failures += 1 }
+        }
+
+        print("\n19. The mini deck")
+
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("flightdeck-mini-\(UUID().uuidString)")
+        let sessionsDir = root.appendingPathComponent("sessions")
+        try! FileManager.default.createDirectory(at: sessionsDir,
+                                                 withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let now = Date().timeIntervalSince1970 * 1000
+        func write(_ id: String, project: String, status: String) {
+            let record: [String: Any] = [
+                // Our own pid, so every synthetic agent reads as alive.
+                "pid": ProcessInfo.processInfo.processIdentifier,
+                "sessionId": id,
+                "cwd": root.appendingPathComponent(project).path,
+                "name": id,
+                "kind": "interactive",
+                "status": status,
+                "startedAt": now - 60_000,
+                "updatedAt": now,
+                "statusUpdatedAt": now,
+            ]
+            try! JSONSerialization.data(withJSONObject: record)
+                .write(to: sessionsDir.appendingPathComponent("\(id).json"))
+        }
+
+        write("a", project: "alpha", status: "busy")
+        write("b", project: "bravo", status: "idle")
+        write("c", project: "charlie", status: "needs_input")
+        write("d", project: "delta", status: "compacting")
+        // An open vocabulary status counts as working everywhere else in the
+        // app; the strip must not be the one place an agent goes missing.
+        write("e", project: "echo", status: "shell")
+
+        let store = SessionStore(
+            sessionsDir: sessionsDir,
+            titles: TitleService(enabled: false),
+            dismissals: DismissalStore(storeURL: root.appendingPathComponent("dismissed.json"))
+        )
+        store.refresh()
+
+        let strip = store.activeSessions.map(\.project)
+        check("the finished agent is left out", !strip.contains("bravo"))
+        check("the working agent is in", strip.contains("alpha"))
+        check("compacting counts as in flight", strip.contains("delta"))
+        check("an unknown status is not dropped", strip.contains("echo"))
+        check("an agent waiting on you is in", strip.contains("charlie"))
+        check("nothing else is listed", strip.count == 4)
+        check("whoever needs you is first", strip.first == "charlie")
+
+        // Clearing only ever touches finished agents, so the strip is
+        // unaffected by cleanup in the main window.
+        store.clearFinished()
+        check("cleanup does not empty the strip", store.activeSessions.count == 4)
+
+        print("\n   watchers are shared between the two windows")
+        store.start()   // main window
+        store.start()   // mini deck
+        check("watching once both are open", store.isWatching)
+        store.stop()    // main window closed
+        check("still watching for the strip alone", store.isWatching)
+        store.stop()    // strip closed
+        check("stops once nothing is open", !store.isWatching)
+
+        return failures
+    }
+
     /// Cover for window targeting. The strings here are the ones Ghostty and
     /// WebStorm actually produced on this machine. The rule that matters is
     /// that a wrong window is worse than no window — an unmatched session
@@ -456,6 +534,7 @@ enum SelfTest {
         failures += titleTests()
         failures += usageTests()
         failures += locatorTests()
+        failures += miniDeckTests()
 
         print("\n\(failures == 0 ? "ALL PASSED" : "\(failures) FAILURE(S)")")
         exit(failures == 0 ? 0 : 1)

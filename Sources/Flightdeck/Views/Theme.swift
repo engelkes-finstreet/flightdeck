@@ -38,6 +38,9 @@ enum Theme {
         static let meta: CGFloat = 11.5
         static let timestamp: CGFloat = 11.5
         static let count: CGFloat = 11
+        /// The mini deck's project names — the smallest type in the app that
+        /// still has to be read, not just noticed.
+        static let mini: CGFloat = 11.5
         static let footer: CGFloat = 11
         /// The rate-limit percentages, the one number in the footer worth reading
         /// from a distance.

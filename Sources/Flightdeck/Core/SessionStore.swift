@@ -55,7 +55,13 @@ final class SessionStore: ObservableObject {
     private var titleObserver: AnyCancellable?
     private var dismissalObserver: AnyCancellable?
 
+    /// Reference counted: the main window and the mini deck each claim the
+    /// watchers independently, so closing one must not blind the other.
+    private var claims = 0
+
     func start() {
+        claims += 1
+        guard claims == 1 else { return }
         refresh()
         watcher = DirectoryWatcher(paths: [sessionsDir.path]) { [weak self] in
             Task { @MainActor in self?.scheduleRefresh() }
@@ -70,7 +76,13 @@ final class SessionStore: ObservableObject {
         }
     }
 
+    /// Whether the FSEvents subscription is live. Exists so `--selftest` can
+    /// prove that closing one window does not blind the other.
+    var isWatching: Bool { watcher != nil }
+
     func stop() {
+        claims = max(0, claims - 1)
+        guard claims == 0 else { return }
         watcher?.stop()
         watcher = nil
         safetyTimer?.invalidate()
@@ -172,6 +184,19 @@ final class SessionStore: ObservableObject {
 
     /// Everything not currently cleared from the view.
     var visibleSessions: [Session] { sessions.filter { !$0.isDismissed } }
+
+    /// What the mini deck shows: agents that are mid-turn, plus anything that
+    /// has stopped to ask you something.
+    ///
+    /// A finished agent is deliberately absent — the strip is a "what is
+    /// happening" instrument, and a row that lingers after the work is done is
+    /// exactly the screen real estate it exists to save. An agent waiting on
+    /// you is included because it is the one state you lose money by missing.
+    /// Ordering is the store's own: needs-you first, then most recently
+    /// changed.
+    var activeSessions: [Session] {
+        visibleSessions.filter { $0.lane == .needsAttention || $0.lane == .running }
+    }
 
     /// The finished agents a cleanup would clear right now.
     var clearableSessions: [Session] {

@@ -5,6 +5,7 @@ import SwiftUI
 /// glance — which is why the type is sized for distance, not density.
 struct FlightdeckView: View {
     @ObservedObject var store: SessionStore
+    @ObservedObject var mini: MiniDeckController
     @Environment(\.textScale) private var textScale
     @State private var showInactive = false
 
@@ -67,6 +68,21 @@ struct FlightdeckView: View {
                 .font(.system(size: CGFloat(15).scaled(textScale), weight: .semibold, design: .rounded))
 
             Spacer()
+
+            // The strip is only discoverable from the View menu otherwise,
+            // and it is the feature you want on the day you are not at the
+            // desk this window was designed for.
+            Button {
+                mini.toggle(store: store)
+            } label: {
+                Image(systemName: mini.isVisible ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle")
+                    .font(.system(size: CGFloat(12).scaled(textScale)))
+                    .foregroundStyle(mini.isVisible ? Theme.working : .secondary)
+            }
+            .buttonStyle(.plain)
+            .help(mini.isVisible
+                  ? "Hide the floating mini deck (⇧⌘M)"
+                  : "Show a small always-on-top strip of the agents in flight (⇧⌘M)")
 
             countPill(store.sessions(in: .needsAttention).count, tint: Theme.attention)
             countPill(store.sessions(in: .running).count, tint: Theme.working)
